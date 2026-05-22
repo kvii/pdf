@@ -1,4 +1,4 @@
-module github.com/ledongthuc/pdf
+module github.com/kvii/pdf
 
 go 1.25.0
 
