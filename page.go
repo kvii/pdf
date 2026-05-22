@@ -543,9 +543,6 @@ func (p Page) GetPlainText(fonts map[string]*Font) (result string, err error) {
 
 	var textBuilder bytes.Buffer
 	showText := func(s string) {
-		textBuilder.WriteString(s)
-	}
-	showEncodedText := func(s string) {
 		for _, ch := range enc.Decode(s) {
 			_, err := textBuilder.WriteRune(ch)
 			if err != nil {
@@ -566,10 +563,8 @@ func (p Page) GetPlainText(fonts map[string]*Font) (result string, err error) {
 			// Easier debug
 			// fmt.Println("<DEBUG><op>", op, "</op><args>", args, "</args>")
 			return
-		case "BT": // add a space between text objects
-			showText("\n")
 		case "T*": // move to start of next line
-			showEncodedText("\n")
+			showText("\n")
 		case "Tf": // set text font and size
 			if len(args) != 2 {
 				panic("bad TL")
@@ -593,13 +588,13 @@ func (p Page) GetPlainText(fonts map[string]*Font) (result string, err error) {
 			if len(args) != 1 {
 				panic("bad Tj operator")
 			}
-			showEncodedText(args[0].RawString())
+			showText(args[0].RawString())
 		case "TJ": // show text, allowing individual glyph positioning
 			v := args[0]
 			for i := 0; i < v.Len(); i++ {
 				x := v.Index(i)
 				if x.Kind() == String {
-					showEncodedText(x.RawString())
+					showText(x.RawString())
 				}
 			}
 		}
