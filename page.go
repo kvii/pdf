@@ -13,6 +13,9 @@ import (
 	"sort"
 	"strings"
 	"unicode/utf16"
+
+	"golang.org/x/text/encoding"
+	"golang.org/x/text/encoding/simplifiedchinese"
 )
 
 // A Page represent a single page in a PDF file.
@@ -214,6 +217,8 @@ func (f Font) getEncoder() TextEncoding {
 			return f.charmapEncoding()
 		case "UniGB-UCS2-H":
 			return &ucs2Encoder{}
+		case "GBK-EUC-H":
+			return newGBKEncoder()
 		default:
 			if DebugOn {
 				println("unknown encoding", enc.Name())
@@ -297,6 +302,26 @@ func (e *ucs2Encoder) Decode(raw string) (text string) {
 	u16s := make([]uint16, len(raw)/2)
 	_ = binary.Read(strings.NewReader(raw), binary.BigEndian, &u16s)
 	return string(utf16.Decode(u16s))
+}
+
+func newGBKEncoder() TextEncoding {
+	return &chineseEncoder{decoder: simplifiedchinese.GBK.NewDecoder()}
+}
+
+type chineseEncoder struct {
+	decoder *encoding.Decoder
+}
+
+func (e *chineseEncoder) Decode(raw string) (text string) {
+	var err error
+	text, err = e.decoder.String(raw)
+	if err != nil {
+		if DebugOn {
+			println("GBK decode error:", err)
+		}
+		return raw
+	}
+	return text
 }
 
 type byteEncoder struct {
