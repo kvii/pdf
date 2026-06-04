@@ -244,6 +244,9 @@ func (f *Font) charmapEncoding() TextEncoding {
 		if m == nil {
 			return &nopEncoder{}
 		}
+		if !m.hasUnicodeMappings() {
+			return &ucs2Encoder{}
+		}
 		return m
 	}
 
@@ -356,6 +359,10 @@ type cmap struct {
 	space   [4][]byteRange // codespace range
 	bfrange []bfrange
 	bfchar  []bfchar
+}
+
+func (m *cmap) hasUnicodeMappings() bool {
+	return len(m.bfchar) > 0 || len(m.bfrange) > 0
 }
 
 func (m *cmap) Decode(raw string) (text string) {
