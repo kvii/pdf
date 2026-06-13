@@ -696,14 +696,6 @@ func (p Page) GetPlainText(fonts map[string]*Font) (result string, err error) {
 		return "", nil
 	}
 
-	xobjs := make(map[string]*XObject)
-	for _, xobj := range p.XObjects() {
-		x := p.XObject(xobj)
-		if x.Subtype() == "Form" {
-			xobjs[xobj] = &x
-		}
-	}
-
 	strm := p.V.Key("Contents")
 	var enc TextEncoding = &nopEncoder{}
 
@@ -779,7 +771,8 @@ func (p Page) GetPlainText(fonts map[string]*Font) (result string, err error) {
 				panic("bad Do operator")
 			}
 			name := args[0].Name()
-			if xobj, ok := xobjs[name]; ok {
+			xobj := p.XObject(name)
+			if !xobj.V.IsNull() && xobj.Subtype() == "Form" {
 				text, _ := xobj.GetPlainText()
 				addText(text)
 			}
@@ -1044,6 +1037,16 @@ func (p Page) Content() Content {
 			g.Tm = matrix{{1, 0, 0}, {0, 1, 0}, {tx, 0, 1}}.mul(g.Tm)
 		}
 	}
+	showRawText := func(s string) {
+		text = append(text, Text{
+			Font:     "",
+			FontSize: 0,
+			X:        g.CTM[2][0],
+			Y:        g.CTM[2][1],
+			W:        0,
+			S:        s,
+		})
+	}
 
 	var rect []Rect
 	var gstack []gstate
@@ -1227,6 +1230,18 @@ func (p Page) Content() Content {
 				panic("bad Tz")
 			}
 			g.Th = args[0].Float64() / 100
+
+		case "Do":
+			if len(args) != 1 {
+				panic("bad Do operator")
+			}
+			name := args[0].Name()
+			xobj := p.XObject(name)
+			if !xobj.V.IsNull() && xobj.Subtype() == "Form" {
+				// XObject should be treated as a whole.
+				s, _ := xobj.GetPlainText()
+				showRawText(s)
+			}
 		}
 	})
 	return Content{text, rect}
