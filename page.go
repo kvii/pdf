@@ -143,14 +143,133 @@ func (p Page) Resources() Value {
 	return p.findInherited("Resources")
 }
 
+// XObjects returns a list of the XObjects associated with the page.
+func (p Page) XObjects() []string {
+	return p.Resources().Key("XObject").Keys()
+}
+
 // Fonts returns a list of the fonts associated with the page.
 func (p Page) Fonts() []string {
 	return p.Resources().Key("Font").Keys()
 }
 
+// XObject returns the XObject with the given name associated with the page.
+func (p Page) XObject(name string) XObject {
+	return XObject{p.Resources().Key("XObject").Key(name)}
+}
+
 // Font returns the font with the given name associated with the page.
 func (p Page) Font(name string) Font {
 	return Font{p.Resources().Key("Font").Key(name), nil}
+}
+
+// A XObject represent a xobject in a PDF file.
+// The methods interpret a XObject dictionary stored in V.
+type XObject struct {
+	V Value
+}
+
+// Subtype returns the XObject's subtype.
+func (x XObject) Subtype() string {
+	return x.V.Key("Subtype").Name()
+}
+
+// Resources returns the resources dictionary associated with the page.
+func (x XObject) Resources() Value {
+	return x.V.Key("Resources")
+}
+
+// Fonts returns a list of the fonts associated with the page.
+func (x XObject) Fonts() []string {
+	return x.Resources().Key("Font").Keys()
+}
+
+// Font returns the font with the given name associated with the page.
+func (x XObject) Font(name string) Font {
+	return Font{x.Resources().Key("Font").Key(name), nil}
+}
+
+// GetPlainText returns the XObject's all text without format.
+func (x XObject) GetPlainText() (result string, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			result = ""
+			err = errors.New(fmt.Sprint(r))
+		}
+	}()
+
+	// Handle in case the is not a form xobject
+	if x.Subtype() != "Form" {
+		return "", nil
+	}
+
+	var enc TextEncoding = &nopEncoder{}
+
+	fonts := make(map[string]*Font)
+	for _, font := range x.Fonts() {
+		f := x.Font(font)
+		fonts[font] = &f
+	}
+
+	var textBuilder bytes.Buffer
+	showText := func(s string) {
+		for _, ch := range enc.Decode(s) {
+			_, err := textBuilder.WriteRune(ch)
+			if err != nil {
+				panic(err)
+			}
+		}
+	}
+
+	Interpret(x.V, func(stk *Stack, op string) {
+		n := stk.Len()
+		args := make([]Value, n)
+		for i := n - 1; i >= 0; i-- {
+			args[i] = stk.Pop()
+		}
+
+		switch op {
+		default:
+			// Easier debug
+			// fmt.Println("<DEBUG><op>", op, "</op><args>", args, "</args>")
+			return
+		case "T*": // move to start of next line
+			showText("\n")
+		case "Tf": // set text font and size
+			if len(args) != 2 {
+				panic("bad TL")
+			}
+			if font, ok := fonts[args[0].Name()]; ok {
+				enc = font.Encoder()
+			} else {
+				enc = &nopEncoder{}
+			}
+		case "\"": // set spacing, move to next line, and show text
+			if len(args) != 3 {
+				panic("bad \" operator")
+			}
+			fallthrough
+		case "'": // move to next line and show text
+			if len(args) != 1 {
+				panic("bad ' operator")
+			}
+			fallthrough
+		case "Tj": // show text
+			if len(args) != 1 {
+				panic("bad Tj operator")
+			}
+			showText(args[0].RawString())
+		case "TJ": // show text, allowing individual glyph positioning
+			v := args[0]
+			for i := 0; i < v.Len(); i++ {
+				x := v.Index(i)
+				if x.Kind() == String {
+					showText(x.RawString())
+				}
+			}
+		}
+	})
+	return textBuilder.String(), nil
 }
 
 // A Font represent a font in a PDF file.
@@ -574,6 +693,15 @@ func (p Page) GetPlainText(fonts map[string]*Font) (result string, err error) {
 	if p.V.IsNull() || p.V.Key("Contents").Kind() == Null {
 		return "", nil
 	}
+
+	xobjs := make(map[string]*XObject)
+	for _, xobj := range p.XObjects() {
+		x := p.XObject(xobj)
+		if x.Subtype() == "Form" {
+			xobjs[xobj] = &x
+		}
+	}
+
 	strm := p.V.Key("Contents")
 	var enc TextEncoding = &nopEncoder{}
 
@@ -593,6 +721,9 @@ func (p Page) GetPlainText(fonts map[string]*Font) (result string, err error) {
 				panic(err)
 			}
 		}
+	}
+	addText := func(s string) {
+		textBuilder.WriteString(s)
 	}
 
 	Interpret(strm, func(stk *Stack, op string) {
@@ -640,6 +771,15 @@ func (p Page) GetPlainText(fonts map[string]*Font) (result string, err error) {
 				if x.Kind() == String {
 					showText(x.RawString())
 				}
+			}
+		case "Do":
+			if len(args) != 1 {
+				panic("bad Do operator")
+			}
+			name := args[0].Name()
+			if xobj, ok := xobjs[name]; ok {
+				text, _ := xobj.GetPlainText()
+				addText(text)
 			}
 		}
 	})
