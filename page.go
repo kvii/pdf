@@ -338,6 +338,8 @@ func (f Font) getEncoder() TextEncoding {
 			return &ucs2Encoder{}
 		case "GBK-EUC-H":
 			return newGBKEncoder()
+		case "UniGB-UTF16-H":
+			return &ucs2Encoder{}
 		default:
 			if DebugOn {
 				println("unknown encoding", enc.Name())
