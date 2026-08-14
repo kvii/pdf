@@ -1177,6 +1177,7 @@ func (p Page) Content() Content {
 			showText(args[0].RawString())
 
 		case "TJ": // show text, allowing individual glyph positioning
+			tm := g.Tm
 			v := args[0]
 			for i := 0; i < v.Len(); i++ {
 				x := v.Index(i)
@@ -1187,7 +1188,7 @@ func (p Page) Content() Content {
 					g.Tm = matrix{{1, 0, 0}, {0, 1, 0}, {tx, 0, 1}}.mul(g.Tm)
 				}
 			}
-			showText("\n")
+			g.Tm = tm
 
 		case "TL": // set text leading
 			if len(args) != 1 {
