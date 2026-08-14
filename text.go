@@ -161,7 +161,7 @@ var macRomanEncoding = [256]rune{
 // isSameSentence checks if the current text segment likely belongs to the same sentence
 // as the last text segment based on font, size, vertical position, and lack of
 // sentence-ending punctuation in the last segment.
-func IsSameSentence(last, current Text) bool {
+func isSameSentence(last, current Text) bool {
 	return last.Font == current.Font &&
 		math.Abs(last.FontSize-current.FontSize) < 0.1 &&
 		math.Abs(last.Y-current.Y) < 5 &&

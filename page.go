@@ -87,38 +87,6 @@ func (r *Reader) GetPlainText() (reader io.Reader, err error) {
 	return &buf, nil
 }
 
-// GetStyledTexts returns list all sentences in an array, that are included styles
-func (r *Reader) GetStyledTexts() (sentences []Text, err error) {
-	totalPage := r.NumPage()
-	for pageIndex := 1; pageIndex <= totalPage; pageIndex++ {
-		p := r.Page(pageIndex)
-
-		if p.V.IsNull() || p.V.Key("Contents").Kind() == Null {
-			continue
-		}
-		var lastTextStyle Text
-		texts := p.Content().Text
-		for _, text := range texts {
-			if lastTextStyle == (Text{}) {
-				lastTextStyle = text
-				continue
-			}
-
-			if IsSameSentence(lastTextStyle, text) {
-				lastTextStyle.S = lastTextStyle.S + text.S
-			} else {
-				sentences = append(sentences, lastTextStyle)
-				lastTextStyle = text
-			}
-		}
-		if len(lastTextStyle.S) > 0 {
-			sentences = append(sentences, lastTextStyle)
-		}
-	}
-
-	return sentences, err
-}
-
 func (p Page) findInherited(key string) Value {
 	for v := p.V; !v.IsNull(); v = v.Key("Parent") {
 		if r := v.Key(key); !r.IsNull() {
@@ -946,8 +914,6 @@ func (p Page) GetPlainText(fonts map[string]*Font) (result string, err error) {
 
 		switch op {
 		default:
-			// Easier debug
-			// fmt.Println("<DEBUG><op>", op, "</op><args>", args, "</args>")
 			return
 		case "T*": // move to start of next line
 			showText("\n")
