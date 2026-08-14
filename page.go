@@ -272,6 +272,223 @@ func (x XObject) GetPlainText() (result string, err error) {
 	return textBuilder.String(), nil
 }
 
+// content returns the XObject's content.
+func (x XObject) content(g gstate) Content {
+	var enc TextEncoding = &nopEncoder{}
+
+	var text []Text
+	showText := func(s string) {
+		n := 0
+		decoded := enc.Decode(s)
+		for _, ch := range decoded {
+			var w0 float64
+			if n < len(s) {
+				w0 = g.Tf.Width(int(s[n]))
+			}
+			n++
+
+			f := g.Tf.BaseFont()
+			if i := strings.Index(f, "+"); i >= 0 {
+				f = f[i+1:]
+			}
+
+			Trm := matrix{{g.Tfs * g.Th, 0, 0}, {0, g.Tfs, 0}, {0, g.Trise, 1}}.mul(g.Tm).mul(g.CTM)
+			text = append(text, Text{f, Trm[0][0], Trm[2][0], Trm[2][1], w0 / 1000 * Trm[0][0], string(ch)})
+
+			tx := w0/1000*g.Tfs + g.Tc
+			tx *= g.Th
+			g.Tm = matrix{{1, 0, 0}, {0, 1, 0}, {tx, 0, 1}}.mul(g.Tm)
+		}
+	}
+
+	var rect []Rect
+	var gstack []gstate
+	Interpret(x.V, func(stk *Stack, op string) {
+		n := stk.Len()
+		args := make([]Value, n)
+		for i := n - 1; i >= 0; i-- {
+			args[i] = stk.Pop()
+		}
+		switch op {
+		default:
+			// if DebugOn {
+			// 	fmt.Println(op, args)
+			// }
+			return
+
+		case "cm": // update g.CTM
+			if len(args) != 6 {
+				panic("bad g.Tm")
+			}
+			var m matrix
+			for i := 0; i < 6; i++ {
+				m[i/2][i%2] = args[i].Float64()
+			}
+			m[2][2] = 1
+			g.CTM = m.mul(g.CTM)
+
+		case "gs": // set parameters from graphics state resource
+			//gs := p.Resources().Key("ExtGState").Key(args[0].Name())
+			//font := gs.Key("Font")
+			//if font.Kind() == Array && font.Len() == 2 {
+			// if DebugOn {
+			// 	fmt.Println("FONT", font)
+			// }
+			//}
+
+		case "f": // fill
+		case "g": // setgray
+		case "l": // lineto
+		case "m": // moveto
+
+		case "cs": // set colorspace non-stroking
+		case "scn": // set color non-stroking
+
+		case "re": // append rectangle to path
+			if len(args) != 4 {
+				panic("bad re")
+			}
+			x, y, w, h := args[0].Float64(), args[1].Float64(), args[2].Float64(), args[3].Float64()
+			rect = append(rect, Rect{Point{x, y}, Point{x + w, y + h}})
+
+		case "q": // save graphics state
+			gstack = append(gstack, g)
+
+		case "Q": // restore graphics state
+			n := len(gstack) - 1
+			g = gstack[n]
+			gstack = gstack[:n]
+
+		case "BT": // begin text (reset text matrix and line matrix)
+			g.Tm = ident
+			g.Tlm = g.Tm
+
+		case "ET": // end text
+
+		case "T*": // move to start of next line
+			x := matrix{{1, 0, 0}, {0, 1, 0}, {0, -g.Tl, 1}}
+			g.Tlm = x.mul(g.Tlm)
+			g.Tm = g.Tlm
+
+		case "Tc": // set character spacing
+			if len(args) != 1 {
+				panic("bad g.Tc")
+			}
+			g.Tc = args[0].Float64()
+
+		case "TD": // move text position and set leading
+			if len(args) != 2 {
+				panic("bad Td")
+			}
+			g.Tl = -args[1].Float64()
+			fallthrough
+		case "Td": // move text position
+			if len(args) != 2 {
+				panic("bad Td")
+			}
+			tx := args[0].Float64()
+			ty := args[1].Float64()
+			x := matrix{{1, 0, 0}, {0, 1, 0}, {tx, ty, 1}}
+			g.Tlm = x.mul(g.Tlm)
+			g.Tm = g.Tlm
+
+		case "Tf": // set text font and size
+			if len(args) != 2 {
+				panic("bad TL")
+			}
+			f := args[0].Name()
+			g.Tf = x.Font(f)
+			enc = g.Tf.Encoder()
+			if enc == nil {
+				if DebugOn {
+					println("no cmap for", f)
+				}
+				enc = &nopEncoder{}
+			}
+			g.Tfs = args[1].Float64()
+
+		case "\"": // set spacing, move to next line, and show text
+			if len(args) != 3 {
+				panic("bad \" operator")
+			}
+			g.Tw = args[0].Float64()
+			g.Tc = args[1].Float64()
+			args = args[2:]
+			fallthrough
+		case "'": // move to next line and show text
+			if len(args) != 1 {
+				panic("bad ' operator")
+			}
+			x := matrix{{1, 0, 0}, {0, 1, 0}, {0, -g.Tl, 1}}
+			g.Tlm = x.mul(g.Tlm)
+			g.Tm = g.Tlm
+			fallthrough
+		case "Tj": // show text
+			if len(args) != 1 {
+				panic("bad Tj operator")
+			}
+			showText(args[0].RawString())
+
+		case "TJ": // show text, allowing individual glyph positioning
+			tm := g.Tm
+			v := args[0]
+			for i := 0; i < v.Len(); i++ {
+				x := v.Index(i)
+				if x.Kind() == String {
+					showText(x.RawString())
+				} else {
+					tx := -x.Float64() / 1000 * g.Tfs * g.Th
+					g.Tm = matrix{{1, 0, 0}, {0, 1, 0}, {tx, 0, 1}}.mul(g.Tm)
+				}
+			}
+			g.Tm = tm
+
+		case "TL": // set text leading
+			if len(args) != 1 {
+				panic("bad TL")
+			}
+			g.Tl = args[0].Float64()
+
+		case "Tm": // set text matrix and line matrix
+			if len(args) != 6 {
+				panic("bad g.Tm")
+			}
+			var m matrix
+			for i := 0; i < 6; i++ {
+				m[i/2][i%2] = args[i].Float64()
+			}
+			m[2][2] = 1
+			g.Tm = m
+			g.Tlm = m
+
+		case "Tr": // set text rendering mode
+			if len(args) != 1 {
+				panic("bad Tr")
+			}
+			g.Tmode = int(args[0].Int64())
+
+		case "Ts": // set text rise
+			if len(args) != 1 {
+				panic("bad Ts")
+			}
+			g.Trise = args[0].Float64()
+
+		case "Tw": // set word spacing
+			if len(args) != 1 {
+				panic("bad g.Tw")
+			}
+			g.Tw = args[0].Float64()
+
+		case "Tz": // set horizontal text scaling
+			if len(args) != 1 {
+				panic("bad Tz")
+			}
+			g.Th = args[0].Float64() / 100
+		}
+	})
+	return Content{text, rect}
+}
+
 // A Font represent a font in a PDF file.
 // The methods interpret a Font dictionary stored in V.
 type Font struct {
@@ -1037,16 +1254,6 @@ func (p Page) Content() Content {
 			g.Tm = matrix{{1, 0, 0}, {0, 1, 0}, {tx, 0, 1}}.mul(g.Tm)
 		}
 	}
-	showRawText := func(s string) {
-		text = append(text, Text{
-			Font:     "",
-			FontSize: 0,
-			X:        g.CTM[2][0],
-			Y:        g.CTM[2][1],
-			W:        0,
-			S:        s,
-		})
-	}
 
 	var rect []Rect
 	var gstack []gstate
@@ -1239,9 +1446,9 @@ func (p Page) Content() Content {
 			name := args[0].Name()
 			xobj := p.XObject(name)
 			if !xobj.V.IsNull() && xobj.Subtype() == "Form" {
-				// XObject should be treated as a whole.
-				s, _ := xobj.GetPlainText()
-				showRawText(s)
+				c := xobj.content(g)
+				text = append(text, c.Text...)
+				rect = append(rect, c.Rect...)
 			}
 		}
 	})
