@@ -69,16 +69,9 @@ func (r *Reader) NumPage() int {
 func (r *Reader) GetPlainText() (reader io.Reader, err error) {
 	pages := r.NumPage()
 	var buf bytes.Buffer
-	fonts := make(map[string]*Font)
 	for i := 1; i <= pages; i++ {
 		p := r.Page(i)
-		for _, name := range p.Fonts() { // cache fonts so we don't continually parse charmap
-			if _, ok := fonts[name]; !ok {
-				f := p.Font(name)
-				fonts[name] = &f
-			}
-		}
-		text, err := p.GetPlainText(fonts)
+		text, err := p.GetPlainText()
 		if err != nil {
 			return &bytes.Buffer{}, err
 		}
@@ -867,8 +860,7 @@ type gstate struct {
 }
 
 // GetPlainText returns the page's all text without format.
-// fonts can be passed in (to improve parsing performance) or left nil
-func (p Page) GetPlainText(fonts map[string]*Font) (result string, err error) {
+func (p Page) GetPlainText() (result string, err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			result = ""
@@ -884,12 +876,10 @@ func (p Page) GetPlainText(fonts map[string]*Font) (result string, err error) {
 	strm := p.V.Key("Contents")
 	var enc TextEncoding = &nopEncoder{}
 
-	if fonts == nil {
-		fonts = make(map[string]*Font)
-		for _, font := range p.Fonts() {
-			f := p.Font(font)
-			fonts[font] = &f
-		}
+	fonts := make(map[string]*Font)
+	for _, font := range p.Fonts() {
+		f := p.Font(font)
+		fonts[font] = &f
 	}
 
 	var textBuilder bytes.Buffer
