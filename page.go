@@ -6,13 +6,11 @@ package pdf
 
 import (
 	"bytes"
-	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
 	"sort"
 	"strings"
-	"unicode/utf16"
 )
 
 // A Page represent a single page in a PDF file.
@@ -294,9 +292,7 @@ func (e *nopEncoder) Decode(raw string) (text string) {
 type ucs2Encoder struct{}
 
 func (e *ucs2Encoder) Decode(raw string) (text string) {
-	u16s := make([]uint16, len(raw)/2)
-	_ = binary.Read(strings.NewReader(raw), binary.BigEndian, &u16s)
-	return string(utf16.Decode(u16s))
+	return utf16Decode(raw)
 }
 
 type byteEncoder struct {
