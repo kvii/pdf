@@ -133,23 +133,37 @@ func (x XObject) Subtype() string {
 	return x.V.Key("Subtype").Name()
 }
 
-// Resources returns the resources dictionary associated with the page.
+// Resources returns the resources dictionary associated with the object.
 func (x XObject) Resources() Value {
 	return x.V.Key("Resources")
 }
 
-// Fonts returns a list of the fonts associated with the page.
+// XObjects returns a list of the XObjects associated with the object.
+func (x XObject) XObjects() []string {
+	return x.Resources().Key("XObject").Keys()
+}
+
+// Fonts returns a list of the fonts associated with the object.
 func (x XObject) Fonts() []string {
 	return x.Resources().Key("Font").Keys()
 }
 
-// Font returns the font with the given name associated with the page.
+// XObject returns the XObject with the given name associated with the object.
+func (x XObject) XObject(name string) XObject {
+	return XObject{x.Resources().Key("XObject").Key(name)}
+}
+
+// Font returns the font with the given name associated with the object.
 func (x XObject) Font(name string) Font {
 	return Font{x.Resources().Key("Font").Key(name), nil}
 }
 
 // GetPlainText returns the XObject's all text without format.
 func (x XObject) GetPlainText() (result string, err error) {
+	return x.getPlainText(map[objptr]struct{}{})
+}
+
+func (x XObject) getPlainText(st map[objptr]struct{}) (result string, err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			result = ""
@@ -161,6 +175,11 @@ func (x XObject) GetPlainText() (result string, err error) {
 	if x.Subtype() != "Form" {
 		return "", nil
 	}
+	// detect ring
+	if _, ok := st[x.V.ptr]; ok {
+		return "", errors.New("detected ring in XObject")
+	}
+	st[x.V.ptr] = struct{}{}
 
 	var enc TextEncoding = &nopEncoder{}
 
@@ -178,6 +197,9 @@ func (x XObject) GetPlainText() (result string, err error) {
 				panic(err)
 			}
 		}
+	}
+	addText := func(s string) {
+		textBuilder.WriteString(s)
 	}
 
 	Interpret(x.V, func(stk *Stack, op string) {
@@ -226,13 +248,30 @@ func (x XObject) GetPlainText() (result string, err error) {
 					showText(x.RawString())
 				}
 			}
+		case "Do":
+			if len(args) != 1 {
+				panic("bad Do operator")
+			}
+			name := args[0].Name()
+			xobj := x.XObject(name)
+			if !xobj.V.IsNull() && xobj.Subtype() == "Form" {
+				text, _ := xobj.getPlainText(st)
+				addText(text)
+			}
 		}
 	})
+	delete(st, x.V.ptr)
 	return textBuilder.String(), nil
 }
 
 // content returns the XObject's content.
-func (x XObject) content(g gstate) Content {
+func (x XObject) content(g gstate, st map[objptr]struct{}) Content {
+	// detect ring
+	if _, ok := st[x.V.ptr]; ok {
+		panic(errors.New("detected ring in XObject"))
+	}
+	st[x.V.ptr] = struct{}{}
+
 	var enc TextEncoding = &nopEncoder{}
 
 	var text []Text
@@ -443,8 +482,20 @@ func (x XObject) content(g gstate) Content {
 				panic("bad Tz")
 			}
 			g.Th = args[0].Float64() / 100
+		case "Do":
+			if len(args) != 1 {
+				panic("bad Do operator")
+			}
+			name := args[0].Name()
+			xobj := x.XObject(name)
+			if !xobj.V.IsNull() && xobj.Subtype() == "Form" {
+				c := xobj.content(g, st)
+				text = append(text, c.Text...)
+				rect = append(rect, c.Rect...)
+			}
 		}
 	})
+	delete(st, x.V.ptr)
 	return Content{text, rect}
 }
 
@@ -1365,7 +1416,7 @@ func (p Page) Content() Content {
 			name := args[0].Name()
 			xobj := p.XObject(name)
 			if !xobj.V.IsNull() && xobj.Subtype() == "Form" {
-				c := xobj.content(g)
+				c := xobj.content(g, map[objptr]struct{}{})
 				text = append(text, c.Text...)
 				rect = append(rect, c.Rect...)
 			}
