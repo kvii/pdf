@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"sort"
 	"strings"
 
@@ -285,13 +286,7 @@ func (x XObject) content(g gstate, st map[objptr]struct{}) Content {
 			}
 			n++
 
-			f := g.Tf.BaseFont()
-			if i := strings.Index(f, "+"); i >= 0 {
-				f = f[i+1:]
-			}
-
-			Trm := matrix{{g.Tfs * g.Th, 0, 0}, {0, g.Tfs, 0}, {0, g.Trise, 1}}.mul(g.Tm).mul(g.CTM)
-			text = append(text, Text{f, Trm[0][0], Trm[2][0], Trm[2][1], w0 / 1000 * Trm[0][0], string(ch)})
+			text = append(text, g.text(w0, ch))
 
 			tx := w0/1000*g.Tfs + g.Tc
 			tx *= g.Th
@@ -838,6 +833,7 @@ type Text struct {
 	X        float64 // the X coordinate, in points, increasing left to right
 	Y        float64 // the Y coordinate, in points, increasing bottom to top
 	W        float64 // the width of the text, in points
+	H        float64 // the height of the text, in points
 	S        string  // the actual UTF-8 text
 }
 
@@ -871,6 +867,27 @@ type gstate struct {
 	Tlm   matrix
 	Trm   matrix
 	CTM   matrix
+}
+
+func (g gstate) text(w0 float64, ch rune) Text {
+	font := g.Tf.BaseFont()
+	if i := strings.Index(font, "+"); i >= 0 {
+		font = font[i+1:]
+	}
+
+	m := g.Tm.mul(g.CTM)
+	a, b, c, d, e, f := m[0][0], m[0][1], m[1][0], m[1][1], m[2][0], m[2][1]
+	size := math.Sqrt(a*a+b*b) * g.Tfs * g.Th
+
+	return Text{
+		Font:     font,
+		FontSize: size,
+		X:        e,
+		Y:        f + g.Trise,
+		W:        w0 / 1000 * size,
+		H:        math.Sqrt(c*c+d*d) * g.Tfs,
+		S:        string(ch),
+	}
 }
 
 // GetPlainText returns the page's all text without format.
@@ -1211,13 +1228,7 @@ func (p Page) Content() Content {
 			}
 			n++
 
-			f := g.Tf.BaseFont()
-			if i := strings.Index(f, "+"); i >= 0 {
-				f = f[i+1:]
-			}
-
-			Trm := matrix{{g.Tfs * g.Th, 0, 0}, {0, g.Tfs, 0}, {0, g.Trise, 1}}.mul(g.Tm).mul(g.CTM)
-			text = append(text, Text{f, Trm[0][0], Trm[2][0], Trm[2][1], w0 / 1000 * Trm[0][0], string(ch)})
+			text = append(text, g.text(w0, ch))
 
 			tx := w0/1000*g.Tfs + g.Tc
 			tx *= g.Th
