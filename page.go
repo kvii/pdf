@@ -161,108 +161,38 @@ func (x XObject) Font(name string) Font {
 
 // GetPlainText returns the XObject's all text without format.
 func (x XObject) GetPlainText() (result string, err error) {
-	return x.getPlainText(map[objptr]struct{}{})
-}
-
-func (x XObject) getPlainText(st map[objptr]struct{}) (result string, err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			result = ""
 			err = errors.New(fmt.Sprint(r))
 		}
 	}()
+	result = x.getPlainText(map[objptr]struct{}{})
+	return
+}
 
+func (x XObject) getPlainText(st map[objptr]struct{}) (result string) {
 	// Handle in case the is not a form xobject
-	if x.Subtype() != "Form" {
-		return "", nil
+	if x.V.IsNull() || x.Subtype() != "Form" {
+		return ""
 	}
 	// detect ring
 	if _, ok := st[x.V.ptr]; ok {
-		return "", errors.New("detected ring in XObject")
+		panic("detected ring in XObject")
 	}
 	st[x.V.ptr] = struct{}{}
 
-	var enc TextEncoding = &nopEncoder{}
-
-	fonts := make(map[string]*Font)
+	fonts := make(map[string]Font)
 	for _, font := range x.Fonts() {
 		f := x.Font(font)
-		fonts[font] = &f
+		fonts[font] = f
 	}
 
-	var textBuilder bytes.Buffer
-	showText := func(s string) {
-		for _, ch := range enc.Decode(s) {
-			_, err := textBuilder.WriteRune(ch)
-			if err != nil {
-				panic(err)
-			}
-		}
-	}
-	addText := func(s string) {
-		textBuilder.WriteString(s)
-	}
-
-	Interpret(x.V, func(stk *Stack, op string) {
-		n := stk.Len()
-		args := make([]Value, n)
-		for i := n - 1; i >= 0; i-- {
-			args[i] = stk.Pop()
-		}
-
-		switch op {
-		default:
-			// Easier debug
-			// fmt.Println("<DEBUG><op>", op, "</op><args>", args, "</args>")
-			return
-		case "T*": // move to start of next line
-			showText("\n")
-		case "Tf": // set text font and size
-			if len(args) != 2 {
-				panic("bad TL")
-			}
-			if font, ok := fonts[args[0].Name()]; ok {
-				enc = font.Encoder()
-			} else {
-				enc = &nopEncoder{}
-			}
-		case "\"": // set spacing, move to next line, and show text
-			if len(args) != 3 {
-				panic("bad \" operator")
-			}
-			fallthrough
-		case "'": // move to next line and show text
-			if len(args) != 1 {
-				panic("bad ' operator")
-			}
-			fallthrough
-		case "Tj": // show text
-			if len(args) != 1 {
-				panic("bad Tj operator")
-			}
-			showText(args[0].RawString())
-		case "TJ": // show text, allowing individual glyph positioning
-			v := args[0]
-			for i := 0; i < v.Len(); i++ {
-				x := v.Index(i)
-				if x.Kind() == String {
-					showText(x.RawString())
-				}
-			}
-		case "Do":
-			if len(args) != 1 {
-				panic("bad Do operator")
-			}
-			name := args[0].Name()
-			xobj := x.XObject(name)
-			if !xobj.V.IsNull() && xobj.Subtype() == "Form" {
-				text, _ := xobj.getPlainText(st)
-				addText(text)
-			}
-		}
+	result = getPlainText(x.V, fonts, func(name string) string {
+		return x.XObject(name).getPlainText(st)
 	})
 	delete(st, x.V.ptr)
-	return textBuilder.String(), nil
+	return
 }
 
 // content returns the XObject's content.
@@ -273,225 +203,28 @@ func (x XObject) content(g gstate, st map[objptr]struct{}) Content {
 	}
 	st[x.V.ptr] = struct{}{}
 
-	var enc TextEncoding = &nopEncoder{}
-
-	var text []Text
-	showText := func(s string) {
-		n := 0
-		decoded := enc.Decode(s)
-		for _, ch := range decoded {
-			var w0 float64
-			if n < len(s) {
-				w0 = g.Tf.Width(int(s[n]))
-			}
-			n++
-
-			text = append(text, g.text(w0, ch))
-
-			tx := w0/1000*g.Tfs + g.Tc
-			tx *= g.Th
-			g.Tm = matrix{{1, 0, 0}, {0, 1, 0}, {tx, 0, 1}}.mul(g.Tm)
-		}
+	fonts := make(map[string]Font)
+	for _, font := range x.Fonts() {
+		f := x.Font(font)
+		fonts[font] = f
 	}
 
-	var rect []Rect
-	var gstack []gstate
-	Interpret(x.V, func(stk *Stack, op string) {
-		n := stk.Len()
-		args := make([]Value, n)
-		for i := n - 1; i >= 0; i-- {
-			args[i] = stk.Pop()
-		}
-		switch op {
-		default:
-			// if DebugOn {
-			// 	fmt.Println(op, args)
-			// }
-			return
-
-		case "cm": // update g.CTM
-			if len(args) != 6 {
-				panic("bad g.Tm")
-			}
-			var m matrix
-			for i := 0; i < 6; i++ {
-				m[i/2][i%2] = args[i].Float64()
-			}
-			m[2][2] = 1
-			g.CTM = m.mul(g.CTM)
-
-		case "gs": // set parameters from graphics state resource
-			//gs := p.Resources().Key("ExtGState").Key(args[0].Name())
-			//font := gs.Key("Font")
-			//if font.Kind() == Array && font.Len() == 2 {
-			// if DebugOn {
-			// 	fmt.Println("FONT", font)
-			// }
-			//}
-
-		case "f": // fill
-		case "g": // setgray
-		case "l": // lineto
-		case "m": // moveto
-
-		case "cs": // set colorspace non-stroking
-		case "scn": // set color non-stroking
-
-		case "re": // append rectangle to path
-			if len(args) != 4 {
-				panic("bad re")
-			}
-			x, y, w, h := args[0].Float64(), args[1].Float64(), args[2].Float64(), args[3].Float64()
-			rect = append(rect, Rect{Point{x, y}, Point{x + w, y + h}})
-
-		case "q": // save graphics state
-			gstack = append(gstack, g)
-
-		case "Q": // restore graphics state
-			n := len(gstack) - 1
-			g = gstack[n]
-			gstack = gstack[:n]
-
-		case "BT": // begin text (reset text matrix and line matrix)
-			g.Tm = ident
-			g.Tlm = g.Tm
-
-		case "ET": // end text
-
-		case "T*": // move to start of next line
-			x := matrix{{1, 0, 0}, {0, 1, 0}, {0, -g.Tl, 1}}
-			g.Tlm = x.mul(g.Tlm)
-			g.Tm = g.Tlm
-
-		case "Tc": // set character spacing
-			if len(args) != 1 {
-				panic("bad g.Tc")
-			}
-			g.Tc = args[0].Float64()
-
-		case "TD": // move text position and set leading
-			if len(args) != 2 {
-				panic("bad Td")
-			}
-			g.Tl = -args[1].Float64()
-			fallthrough
-		case "Td": // move text position
-			if len(args) != 2 {
-				panic("bad Td")
-			}
-			tx := args[0].Float64()
-			ty := args[1].Float64()
-			x := matrix{{1, 0, 0}, {0, 1, 0}, {tx, ty, 1}}
-			g.Tlm = x.mul(g.Tlm)
-			g.Tm = g.Tlm
-
-		case "Tf": // set text font and size
-			if len(args) != 2 {
-				panic("bad TL")
-			}
-			f := args[0].Name()
-			g.Tf = x.Font(f)
-			enc = g.Tf.Encoder()
-			if enc == nil {
-				if DebugOn {
-					println("no cmap for", f)
-				}
-				enc = &nopEncoder{}
-			}
-			g.Tfs = args[1].Float64()
-
-		case "\"": // set spacing, move to next line, and show text
-			if len(args) != 3 {
-				panic("bad \" operator")
-			}
-			g.Tw = args[0].Float64()
-			g.Tc = args[1].Float64()
-			args = args[2:]
-			fallthrough
-		case "'": // move to next line and show text
-			if len(args) != 1 {
-				panic("bad ' operator")
-			}
-			x := matrix{{1, 0, 0}, {0, 1, 0}, {0, -g.Tl, 1}}
-			g.Tlm = x.mul(g.Tlm)
-			g.Tm = g.Tlm
-			fallthrough
-		case "Tj": // show text
-			if len(args) != 1 {
-				panic("bad Tj operator")
-			}
-			showText(args[0].RawString())
-
-		case "TJ": // show text, allowing individual glyph positioning
-			tm := g.Tm
-			v := args[0]
-			for i := 0; i < v.Len(); i++ {
-				x := v.Index(i)
-				if x.Kind() == String {
-					showText(x.RawString())
-				} else {
-					tx := -x.Float64() / 1000 * g.Tfs * g.Th
-					g.Tm = matrix{{1, 0, 0}, {0, 1, 0}, {tx, 0, 1}}.mul(g.Tm)
-				}
-			}
-			g.Tm = tm
-
-		case "TL": // set text leading
-			if len(args) != 1 {
-				panic("bad TL")
-			}
-			g.Tl = args[0].Float64()
-
-		case "Tm": // set text matrix and line matrix
-			if len(args) != 6 {
-				panic("bad g.Tm")
-			}
-			var m matrix
-			for i := 0; i < 6; i++ {
-				m[i/2][i%2] = args[i].Float64()
-			}
-			m[2][2] = 1
-			g.Tm = m
-			g.Tlm = m
-
-		case "Tr": // set text rendering mode
-			if len(args) != 1 {
-				panic("bad Tr")
-			}
-			g.Tmode = int(args[0].Int64())
-
-		case "Ts": // set text rise
-			if len(args) != 1 {
-				panic("bad Ts")
-			}
-			g.Trise = args[0].Float64()
-
-		case "Tw": // set word spacing
-			if len(args) != 1 {
-				panic("bad g.Tw")
-			}
-			g.Tw = args[0].Float64()
-
-		case "Tz": // set horizontal text scaling
-			if len(args) != 1 {
-				panic("bad Tz")
-			}
-			g.Th = args[0].Float64() / 100
-		case "Do":
-			if len(args) != 1 {
-				panic("bad Do operator")
-			}
-			name := args[0].Name()
+	content := parseContent(container{
+		v:     x.V,
+		g:     g,
+		fonts: fonts,
+		do: func(c1 *Content, g1 gstate, name string) {
 			xobj := x.XObject(name)
 			if !xobj.V.IsNull() && xobj.Subtype() == "Form" {
-				c := xobj.content(g, st)
-				text = append(text, c.Text...)
-				rect = append(rect, c.Rect...)
+				c2 := xobj.content(g1, st)
+				c1.Text = append(c1.Text, c2.Text...)
+				c1.Rect = append(c1.Rect, c2.Rect...)
 			}
-		}
+		},
 	})
+
 	delete(st, x.V.ptr)
-	return Content{text, rect}
+	return content
 }
 
 // A Font represent a font in a PDF file.
@@ -905,13 +638,21 @@ func (p Page) GetPlainText() (result string, err error) {
 	}
 
 	strm := p.V.Key("Contents")
-	var enc TextEncoding = &nopEncoder{}
 
-	fonts := make(map[string]*Font)
+	fonts := make(map[string]Font)
 	for _, font := range p.Fonts() {
 		f := p.Font(font)
-		fonts[font] = &f
+		fonts[font] = f
 	}
+
+	result = getPlainText(strm, fonts, func(name string) string {
+		return p.XObject(name).getPlainText(map[objptr]struct{}{})
+	})
+	return
+}
+
+func getPlainText(v Value, fonts map[string]Font, do func(name string) string) string {
+	var enc TextEncoding = &nopEncoder{}
 
 	var textBuilder bytes.Buffer
 	showText := func(s string) {
@@ -926,7 +667,7 @@ func (p Page) GetPlainText() (result string, err error) {
 		textBuilder.WriteString(s)
 	}
 
-	Interpret(strm, func(stk *Stack, op string) {
+	Interpret(v, func(stk *Stack, op string) {
 		n := stk.Len()
 		args := make([]Value, n)
 		for i := n - 1; i >= 0; i-- {
@@ -975,14 +716,11 @@ func (p Page) GetPlainText() (result string, err error) {
 				panic("bad Do operator")
 			}
 			name := args[0].Name()
-			xobj := p.XObject(name)
-			if !xobj.V.IsNull() && xobj.Subtype() == "Form" {
-				text, _ := xobj.GetPlainText()
-				addText(text)
-			}
+			text := do(name)
+			addText(text)
 		}
 	})
-	return textBuilder.String(), nil
+	return textBuilder.String()
 }
 
 // Column represents the contents of a column
@@ -1210,35 +948,61 @@ func (p Page) Content() Content {
 		return Content{}
 	}
 	strm := p.V.Key("Contents")
-	var enc TextEncoding = &nopEncoder{}
 
-	var g = gstate{
+	g := gstate{
 		Th:  1,
 		CTM: ident,
 	}
+	fonts := make(map[string]Font)
+	for _, font := range p.Fonts() {
+		f := p.Font(font)
+		fonts[font] = f
+	}
 
-	var text []Text
+	return parseContent(container{
+		v:     strm,
+		g:     g,
+		fonts: fonts,
+		do: func(c *Content, g gstate, name string) {
+			xobj := p.XObject(name)
+			if !xobj.V.IsNull() && xobj.Subtype() == "Form" {
+				c2 := xobj.content(g, map[objptr]struct{}{})
+				c.Text = append(c.Text, c2.Text...)
+				c.Rect = append(c.Rect, c2.Rect...)
+			}
+		},
+	})
+}
+
+type container struct {
+	v     Value
+	g     gstate
+	fonts map[string]Font
+	do    func(c *Content, g gstate, name string)
+}
+
+func parseContent(c container) (r Content) {
+	var enc TextEncoding = &nopEncoder{}
 	showText := func(s string) {
 		n := 0
 		decoded := enc.Decode(s)
 		for _, ch := range decoded {
 			var w0 float64
 			if n < len(s) {
-				w0 = g.Tf.Width(int(s[n]))
+				w0 = c.g.Tf.Width(int(s[n]))
 			}
 			n++
 
-			text = append(text, g.text(w0, ch))
+			r.Text = append(r.Text, c.g.text(w0, ch))
 
-			tx := w0/1000*g.Tfs + g.Tc
-			tx *= g.Th
-			g.Tm = matrix{{1, 0, 0}, {0, 1, 0}, {tx, 0, 1}}.mul(g.Tm)
+			tx := w0/1000*c.g.Tfs + c.g.Tc
+			tx *= c.g.Th
+			c.g.Tm = matrix{{1, 0, 0}, {0, 1, 0}, {tx, 0, 1}}.mul(c.g.Tm)
 		}
 	}
 
-	var rect []Rect
 	var gstack []gstate
-	Interpret(strm, func(stk *Stack, op string) {
+	Interpret(c.v, func(stk *Stack, op string) {
 		n := stk.Len()
 		args := make([]Value, n)
 		for i := n - 1; i >= 0; i-- {
@@ -1260,7 +1024,7 @@ func (p Page) Content() Content {
 				m[i/2][i%2] = args[i].Float64()
 			}
 			m[2][2] = 1
-			g.CTM = m.mul(g.CTM)
+			c.g.CTM = m.mul(c.g.CTM)
 
 		case "gs": // set parameters from graphics state resource
 			//gs := p.Resources().Key("ExtGState").Key(args[0].Name())
@@ -1284,38 +1048,38 @@ func (p Page) Content() Content {
 				panic("bad re")
 			}
 			x, y, w, h := args[0].Float64(), args[1].Float64(), args[2].Float64(), args[3].Float64()
-			rect = append(rect, Rect{Point{x, y}, Point{x + w, y + h}})
+			r.Rect = append(r.Rect, Rect{Point{x, y}, Point{x + w, y + h}})
 
 		case "q": // save graphics state
-			gstack = append(gstack, g)
+			gstack = append(gstack, c.g)
 
 		case "Q": // restore graphics state
 			n := len(gstack) - 1
-			g = gstack[n]
+			c.g = gstack[n]
 			gstack = gstack[:n]
 
 		case "BT": // begin text (reset text matrix and line matrix)
-			g.Tm = ident
-			g.Tlm = g.Tm
+			c.g.Tm = ident
+			c.g.Tlm = c.g.Tm
 
 		case "ET": // end text
 
 		case "T*": // move to start of next line
-			x := matrix{{1, 0, 0}, {0, 1, 0}, {0, -g.Tl, 1}}
-			g.Tlm = x.mul(g.Tlm)
-			g.Tm = g.Tlm
+			x := matrix{{1, 0, 0}, {0, 1, 0}, {0, -c.g.Tl, 1}}
+			c.g.Tlm = x.mul(c.g.Tlm)
+			c.g.Tm = c.g.Tlm
 
 		case "Tc": // set character spacing
 			if len(args) != 1 {
 				panic("bad g.Tc")
 			}
-			g.Tc = args[0].Float64()
+			c.g.Tc = args[0].Float64()
 
 		case "TD": // move text position and set leading
 			if len(args) != 2 {
 				panic("bad Td")
 			}
-			g.Tl = -args[1].Float64()
+			c.g.Tl = -args[1].Float64()
 			fallthrough
 		case "Td": // move text position
 			if len(args) != 2 {
@@ -1324,39 +1088,39 @@ func (p Page) Content() Content {
 			tx := args[0].Float64()
 			ty := args[1].Float64()
 			x := matrix{{1, 0, 0}, {0, 1, 0}, {tx, ty, 1}}
-			g.Tlm = x.mul(g.Tlm)
-			g.Tm = g.Tlm
+			c.g.Tlm = x.mul(c.g.Tlm)
+			c.g.Tm = c.g.Tlm
 
 		case "Tf": // set text font and size
 			if len(args) != 2 {
 				panic("bad TL")
 			}
 			f := args[0].Name()
-			g.Tf = p.Font(f)
-			enc = g.Tf.Encoder()
+			c.g.Tf = c.fonts[f]
+			enc = c.g.Tf.Encoder()
 			if enc == nil {
 				if DebugOn {
 					println("no cmap for", f)
 				}
 				enc = &nopEncoder{}
 			}
-			g.Tfs = args[1].Float64()
+			c.g.Tfs = args[1].Float64()
 
 		case "\"": // set spacing, move to next line, and show text
 			if len(args) != 3 {
 				panic("bad \" operator")
 			}
-			g.Tw = args[0].Float64()
-			g.Tc = args[1].Float64()
+			c.g.Tw = args[0].Float64()
+			c.g.Tc = args[1].Float64()
 			args = args[2:]
 			fallthrough
 		case "'": // move to next line and show text
 			if len(args) != 1 {
 				panic("bad ' operator")
 			}
-			x := matrix{{1, 0, 0}, {0, 1, 0}, {0, -g.Tl, 1}}
-			g.Tlm = x.mul(g.Tlm)
-			g.Tm = g.Tlm
+			x := matrix{{1, 0, 0}, {0, 1, 0}, {0, -c.g.Tl, 1}}
+			c.g.Tlm = x.mul(c.g.Tlm)
+			c.g.Tm = c.g.Tlm
 			fallthrough
 		case "Tj": // show text
 			if len(args) != 1 {
@@ -1365,24 +1129,24 @@ func (p Page) Content() Content {
 			showText(args[0].RawString())
 
 		case "TJ": // show text, allowing individual glyph positioning
-			tm := g.Tm
+			tm := c.g.Tm
 			v := args[0]
 			for i := 0; i < v.Len(); i++ {
 				x := v.Index(i)
 				if x.Kind() == String {
 					showText(x.RawString())
 				} else {
-					tx := -x.Float64() / 1000 * g.Tfs * g.Th
-					g.Tm = matrix{{1, 0, 0}, {0, 1, 0}, {tx, 0, 1}}.mul(g.Tm)
+					tx := -x.Float64() / 1000 * c.g.Tfs * c.g.Th
+					c.g.Tm = matrix{{1, 0, 0}, {0, 1, 0}, {tx, 0, 1}}.mul(c.g.Tm)
 				}
 			}
-			g.Tm = tm
+			c.g.Tm = tm
 
 		case "TL": // set text leading
 			if len(args) != 1 {
 				panic("bad TL")
 			}
-			g.Tl = args[0].Float64()
+			c.g.Tl = args[0].Float64()
 
 		case "Tm": // set text matrix and line matrix
 			if len(args) != 6 {
@@ -1393,47 +1157,41 @@ func (p Page) Content() Content {
 				m[i/2][i%2] = args[i].Float64()
 			}
 			m[2][2] = 1
-			g.Tm = m
-			g.Tlm = m
+			c.g.Tm = m
+			c.g.Tlm = m
 
 		case "Tr": // set text rendering mode
 			if len(args) != 1 {
 				panic("bad Tr")
 			}
-			g.Tmode = int(args[0].Int64())
+			c.g.Tmode = int(args[0].Int64())
 
 		case "Ts": // set text rise
 			if len(args) != 1 {
 				panic("bad Ts")
 			}
-			g.Trise = args[0].Float64()
+			c.g.Trise = args[0].Float64()
 
 		case "Tw": // set word spacing
 			if len(args) != 1 {
 				panic("bad g.Tw")
 			}
-			g.Tw = args[0].Float64()
+			c.g.Tw = args[0].Float64()
 
 		case "Tz": // set horizontal text scaling
 			if len(args) != 1 {
 				panic("bad Tz")
 			}
-			g.Th = args[0].Float64() / 100
+			c.g.Th = args[0].Float64() / 100
 
 		case "Do":
 			if len(args) != 1 {
 				panic("bad Do operator")
 			}
-			name := args[0].Name()
-			xobj := p.XObject(name)
-			if !xobj.V.IsNull() && xobj.Subtype() == "Form" {
-				c := xobj.content(g, map[objptr]struct{}{})
-				text = append(text, c.Text...)
-				rect = append(rect, c.Rect...)
-			}
+			c.do(&r, c.g, args[0].Name())
 		}
 	})
-	return Content{text, rect}
+	return
 }
 
 // TextVertical implements sort.Interface for sorting
