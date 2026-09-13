@@ -547,16 +547,23 @@ type matrix [3][3]float64
 
 var ident = matrix{{1, 0, 0}, {0, 1, 0}, {0, 0, 1}}
 
-func (x matrix) mul(y matrix) matrix {
-	var z matrix
+func (m matrix) mul(n matrix) matrix {
+	var r matrix
 	for i := 0; i < 3; i++ {
 		for j := 0; j < 3; j++ {
 			for k := 0; k < 3; k++ {
-				z[i][j] += x[i][k] * y[k][j]
+				r[i][j] += m[i][k] * n[k][j]
 			}
 		}
 	}
-	return z
+	return r
+}
+
+func (m matrix) transform(x, y float64) (float64, float64) {
+	// [x y 1] * m
+	x1 := x*m[0][0] + y*m[1][0] + m[2][0]
+	y1 := x*m[0][1] + y*m[1][1] + m[2][1]
+	return x1, y1
 }
 
 // A Text represents a single piece of text drawn on a page.
@@ -621,6 +628,11 @@ func (g gstate) text(w0 float64, ch rune) Text {
 		H:        math.Sqrt(c*c+d*d) * g.Tfs,
 		S:        string(ch),
 	}
+}
+
+// current path
+type cPath struct {
+	rect *Rect // constructed by re
 }
 
 // GetPlainText returns the page's all text without format.
@@ -1002,6 +1014,7 @@ func parseContent(c container) (r Content) {
 	}
 
 	var gstack []gstate
+	var cp cPath
 	Interpret(c.v, func(stk *Stack, op string) {
 		n := stk.Len()
 		args := make([]Value, n)
@@ -1035,7 +1048,6 @@ func parseContent(c container) (r Content) {
 			// }
 			//}
 
-		case "f": // fill
 		case "g": // setgray
 		case "l": // lineto
 		case "m": // moveto
@@ -1048,7 +1060,19 @@ func parseContent(c container) (r Content) {
 				panic("bad re")
 			}
 			x, y, w, h := args[0].Float64(), args[1].Float64(), args[2].Float64(), args[3].Float64()
-			r.Rect = append(r.Rect, Rect{Point{x, y}, Point{x + w, y + h}})
+			x1, y1 := c.g.CTM.transform(x, y)
+			x2, y2 := c.g.CTM.transform(x+w, y+h)
+			cp.rect = &Rect{Point{x1, y1}, Point{x2, y2}}
+
+		// Path-Painting Operators
+		case "S", "s", "f", "F", "f*", "B", "B*", "b", "b*":
+			if cp.rect != nil {
+				r.Rect = append(r.Rect, *cp.rect)
+			}
+			cp = cPath{}
+
+		case "n": // end path without filling or stroking
+			cp = cPath{}
 
 		case "q": // save graphics state
 			gstack = append(gstack, c.g)
