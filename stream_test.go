@@ -24,6 +24,23 @@ func TestValueReaderOnNonStream(t *testing.T) {
 	}
 }
 
+func TestTiffPredictorReader(t *testing.T) {
+	// One raw of width 2 encoded with the TIFF predictor.
+	// Component 1: raw [5, 10]; Component 2: raw [6, 11] (differences from the previous component).
+	input := []byte{5, 10, 1, 1}
+	r := &tiffPredictorReader{r: bytes.NewReader(input), bpp: 2, row: make([]byte, 4)}
+
+	got, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatalf("ReadAll: %v", err)
+	}
+	// row accumulates: after row1 [5,10,6,11].
+	want := []byte{5, 10, 6, 11}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("decoded = %v, want %v", got, want)
+	}
+}
+
 func TestPNGPredictorReaderNone(t *testing.T) {
 	// Two rows of width 2 encoded with the PNG "None" predictor (filter byte 0).
 	// Row 1: raw [5, 10]; Row 2: raw [6, 11] (no differences).

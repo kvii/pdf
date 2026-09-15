@@ -873,6 +873,8 @@ func applyFilter(rd io.Reader, name string, param Value) io.Reader {
 		switch pred {
 		default: // 1
 			return zr
+		case 2:
+			return &tiffPredictorReader{r: zr, bpp: int(bpp), row: make([]byte, rawLen)}
 		case 10, 11, 12, 13, 14, 15:
 			return &pngPredictorReader{r: zr, bpp: int(bpp), hist: make([]byte, rawLen), tmp: make([]byte, 1+rawLen)}
 		}
@@ -899,7 +901,7 @@ func decodeParams(param Value) (predictor, rawLen, bpp int64) {
 		predictor = v.Int64()
 	}
 	switch predictor {
-	case 1, 10, 11, 12, 13, 14, 15: // 2
+	case 1, 2, 10, 11, 12, 13, 14, 15:
 	default:
 		panic(fmt.Errorf("Predictor %d is currently unsupported", predictor))
 	}
@@ -937,6 +939,35 @@ func decodeParams(param Value) (predictor, rawLen, bpp int64) {
 	}
 	rawLen = columns * bpp
 	return
+}
+
+type tiffPredictorReader struct {
+	r    io.Reader
+	bpp  int
+	row  []byte
+	pend []byte
+}
+
+func (r *tiffPredictorReader) Read(b []byte) (int, error) {
+	n := 0
+	for len(b) > 0 {
+		if len(r.pend) > 0 {
+			m := copy(b, r.pend)
+			n += m
+			b = b[m:]
+			r.pend = r.pend[m:]
+			continue
+		}
+		_, err := io.ReadFull(r.r, r.row)
+		if err != nil {
+			return n, err
+		}
+		for i := r.bpp; i < len(r.row); i++ {
+			r.row[i] += r.row[i-r.bpp]
+		}
+		r.pend = r.row
+	}
+	return n, nil
 }
 
 type pngPredictorReader struct {
