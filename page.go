@@ -632,8 +632,7 @@ func (g gstate) text(w0 float64, ch rune) Text {
 
 // current path
 type cPath struct {
-	hasRe bool
-	re    Rect
+	re []Rect // rectangles defined by re
 }
 
 // GetPlainText returns the page's all text without format.
@@ -1063,14 +1062,11 @@ func parseContent(c container) (r Content) {
 			x, y, w, h := args[0].Float64(), args[1].Float64(), args[2].Float64(), args[3].Float64()
 			x1, y1 := c.g.CTM.transform(x, y)
 			x2, y2 := c.g.CTM.transform(x+w, y+h)
-			cp.hasRe = true
-			cp.re = Rect{Point{x1, y1}, Point{x2, y2}}
+			cp.re = append(cp.re, Rect{Point{x1, y1}, Point{x2, y2}})
 
 		// stroking operators
 		case "S", "s":
-			if cp.hasRe {
-				r.Rect = append(r.Rect, cp.re)
-			}
+			r.Rect = append(r.Rect, cp.re...)
 			cp = cPath{}
 		// filling or clipping paths are not collected
 		case "f", "F", "f*", "B", "B*", "b", "b*", "n":
