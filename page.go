@@ -197,6 +197,9 @@ func (x XObject) getPlainText(st map[objptr]struct{}) (result string) {
 
 // content returns the XObject's content.
 func (x XObject) content(g gstate, st map[objptr]struct{}) Content {
+	if x.V.IsNull() || x.Subtype() != "Form" {
+		return Content{}
+	}
 	// detect ring
 	if _, ok := st[x.V.ptr]; ok {
 		panic(errors.New("detected ring in XObject"))
@@ -214,12 +217,9 @@ func (x XObject) content(g gstate, st map[objptr]struct{}) Content {
 		g:     g,
 		fonts: fonts,
 		do: func(c1 *Content, g1 gstate, name string) {
-			xobj := x.XObject(name)
-			if !xobj.V.IsNull() && xobj.Subtype() == "Form" {
-				c2 := xobj.content(g1, st)
-				c1.Text = append(c1.Text, c2.Text...)
-				c1.Rect = append(c1.Rect, c2.Rect...)
-			}
+			c2 := x.XObject(name).content(g1, st)
+			c1.Text = append(c1.Text, c2.Text...)
+			c1.Rect = append(c1.Rect, c2.Rect...)
 		},
 	})
 
@@ -976,12 +976,9 @@ func (p Page) Content() Content {
 		g:     g,
 		fonts: fonts,
 		do: func(c *Content, g gstate, name string) {
-			xobj := p.XObject(name)
-			if !xobj.V.IsNull() && xobj.Subtype() == "Form" {
-				c2 := xobj.content(g, map[objptr]struct{}{})
-				c.Text = append(c.Text, c2.Text...)
-				c.Rect = append(c.Rect, c2.Rect...)
-			}
+			c2 := p.XObject(name).content(g, map[objptr]struct{}{})
+			c.Text = append(c.Text, c2.Text...)
+			c.Rect = append(c.Rect, c2.Rect...)
 		},
 	})
 }
