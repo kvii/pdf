@@ -12,9 +12,7 @@ import (
 	"math"
 	"sort"
 	"strings"
-
-	"golang.org/x/text/encoding"
-	"golang.org/x/text/encoding/simplifiedchinese"
+	"unicode/utf16"
 )
 
 // A Page represent a single page in a PDF file.
@@ -279,6 +277,18 @@ func (f Font) Encoder() TextEncoding {
 }
 
 func (f Font) getEncoder() TextEncoding {
+	toUnicode := f.V.Key("ToUnicode")
+	if toUnicode.Kind() == Stream {
+		m := readCmap(toUnicode)
+		if m == nil {
+			return &nopEncoder{}
+		}
+		if !m.hasUnicodeMappings() {
+			return &ucs2Encoder{}
+		}
+		return m
+	}
+
 	enc := f.V.Key("Encoding")
 	switch enc.Kind() {
 	case Name:
@@ -292,7 +302,7 @@ func (f Font) getEncoder() TextEncoding {
 		case "UniGB-UCS2-H":
 			return &ucs2Encoder{}
 		case "GBK-EUC-H":
-			return newGBKEncoder()
+			return &cmapEncoder{cmapGBKEUC2UniGBUCS2}
 		case "UniGB-UTF16-H":
 			return &ucs2Encoder{}
 		default:
@@ -312,18 +322,6 @@ func (f Font) getEncoder() TextEncoding {
 }
 
 func (f *Font) charmapEncoding() TextEncoding {
-	toUnicode := f.V.Key("ToUnicode")
-	if toUnicode.Kind() == Stream {
-		m := readCmap(toUnicode)
-		if m == nil {
-			return &nopEncoder{}
-		}
-		if !m.hasUnicodeMappings() {
-			return &ucs2Encoder{}
-		}
-		return m
-	}
-
 	return &byteEncoder{&pdfDocEncoding}
 }
 
@@ -348,24 +346,19 @@ func (e *ucs2Encoder) Decode(raw string) (text string) {
 	return utf16Decode(raw)
 }
 
-func newGBKEncoder() TextEncoding {
-	return &chineseEncoder{decoder: simplifiedchinese.GBK.NewDecoder()}
+type cmapEncoder struct {
+	cmap map[uint16]uint16
 }
 
-type chineseEncoder struct {
-	decoder *encoding.Decoder
-}
-
-func (e *chineseEncoder) Decode(raw string) (text string) {
-	var err error
-	text, err = e.decoder.String(raw)
-	if err != nil {
-		if DebugOn {
-			println("GBK decode error:", err)
+func (e *cmapEncoder) Decode(raw string) (text string) {
+	var u []uint16
+	for i := 0; i < len(raw); i += 2 {
+		n1 := uint16(raw[i])<<8 | uint16(raw[i+1])
+		if n2, ok := e.cmap[n1]; ok {
+			u = append(u, n2)
 		}
-		return raw
 	}
-	return text
+	return string(utf16.Decode(u))
 }
 
 type byteEncoder struct {
