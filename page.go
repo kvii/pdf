@@ -212,6 +212,15 @@ func (x XObject) content(g gstate, st map[objptr]struct{}) Content {
 		fonts[font] = f
 	}
 
+	if mv := x.V.Key("Matrix"); mv.Len() == 6 {
+		var m matrix
+		for i := 0; i < 6; i++ {
+			m[i/2][i%2] = mv.Index(i).Float64()
+		}
+		m[2][2] = 1
+		g.CTM = m.mul(g.CTM)
+	}
+
 	content := parseContent(container{
 		v:     x.V,
 		g:     g,
