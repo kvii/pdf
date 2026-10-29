@@ -94,16 +94,16 @@ func TestPNGPredictorReaderUp(t *testing.T) {
 
 func TestPNGPredictorReaderAverage(t *testing.T) {
 	// Two rows of width 2 encoded with the PNG "Average" predictor (filter byte 3).
-	// Row 1: raw [5, 10]; Row 2: raw [1, 1] (differences from the previous row and previous component).
-	input := []byte{3, 5, 10, 3, 1, 1}
+	// Row 1: raw [100, 200]; Row 2: raw [120, 140] (differences from the previous row and previous component).
+	input := []byte{3, 100, 200, 3, 120, 140}
 	r := &pngPredictorReader{r: bytes.NewReader(input), bpp: 1, hist: make([]byte, 2), tmp: make([]byte, 3)}
 
 	got, err := io.ReadAll(r)
 	if err != nil {
 		t.Fatalf("ReadAll: %v", err)
 	}
-	// hist accumulates: after row1 [5+(0+0)/2, 10+(5+0)/2] = [5,12]; after row2 [1+(0+5)/2, 1+(3+12)/2] = [3,8].
-	want := []byte{5, 12, 3, 8}
+	// hist accumulates: after row1 [100+(0+0)/2, 200+(100+0)/2] = [100,250]; after row2 [120+(0+100)/2, (140+(170+250)/2) mod 256] = [170,94].
+	want := []byte{100, 250, 170, 94}
 	if !bytes.Equal(got, want) {
 		t.Fatalf("decoded = %v, want %v", got, want)
 	}

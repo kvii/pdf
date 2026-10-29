@@ -1010,11 +1010,12 @@ func (r *pngPredictorReader) Read(b []byte) (int, error) {
 			}
 		case 3: // Average
 			for i := range r.hist {
-				var a byte
+				var v int
 				if i >= r.bpp {
-					a = r.hist[i-r.bpp]
+					v = int(r.hist[i-r.bpp])
 				}
-				r.hist[i] = r.tmp[i+1] + (a+r.hist[i])/2
+				v = (v + int(r.hist[i])) / 2
+				r.hist[i] = r.tmp[i+1] + byte(v)
 			}
 		case 4: // Paeth
 			for i := range r.hist {
