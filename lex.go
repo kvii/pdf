@@ -575,22 +575,26 @@ func (b *buffer) readInlineImage() dict {
 		}
 		x[n] = b.readObject()
 	}
-	b.readByte() // consume the whitespace after "ID"
+	// consume the single white-space character after "ID"
+	if c := b.readByte(); !isSpace(c) {
+		b.unreadByte()
+		return x
+	}
 
 	// read the raw image bytes of ID
-	id := make([]byte, 0)
+	tmp := b.tmp[:0]
 	for {
-		id = append(id, b.readByte())
-		if len(id) >= 4 && id[len(id)-4] == '\n' && id[len(id)-3] == 'E' && id[len(id)-2] == 'I' && (id[len(id)-1] == '\n' || id[len(id)-1] == ' ') {
-			b.unreadByte()
-			b.unreadByte()
-			b.unreadByte()
-			b.unreadByte()
-			id = id[:len(id)-4] // remove the trailing "\nEI "
+		c := b.readByte()
+		if b.eof {
+			break
+		}
+		tmp = append(tmp, c)
+		if len(tmp) >= 3 && isSpace(tmp[len(tmp)-3]) && tmp[len(tmp)-2] == 'E' && tmp[len(tmp)-1] == 'I' {
+			tmp = tmp[:len(tmp)-3] // remove the trailing "\nEI"
 			break
 		}
 	}
-	x[name("ID")] = string(id)
-	b.readToken() // consume "EI"
+	x[name("ID")] = string(tmp)
+	b.tmp = tmp
 	return x
 }
