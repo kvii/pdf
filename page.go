@@ -280,7 +280,11 @@ func (f Font) Width(code int) float64 {
 }
 
 // Encoder returns the encoding between font code point sequences and UTF-8.
-func (f Font) Encoder() TextEncoding {
+//
+// The receiver is a pointer so the parsed encoding is cached on the Font;
+// with a value receiver the assignment to f.enc would be discarded with the
+// copy, defeating the caching entirely.
+func (f *Font) Encoder() TextEncoding {
 	if f.enc == nil { // caching the Encoder so we don't have to continually parse charmap
 		f.enc = f.getEncoder()
 	}
@@ -435,9 +439,7 @@ Parse:
 							if bfrange.dst.Kind() == String {
 								s := bfrange.dst.RawString()
 								if bfrange.lo != text { // value isn't at the beginning of the range so scale result
-									b := []byte(s)
-									b[len(b)-1] += text[len(text)-1] - bfrange.lo[len(bfrange.lo)-1] // increment last byte by difference
-									s = string(b)
+									s = addOffset(s, beUint(text)-beUint(bfrange.lo))
 								}
 								r = append(r, []rune(utf16Decode(s))...)
 								continue Parse
@@ -644,14 +646,40 @@ type cPath struct {
 	re []Rect // rectangles defined by re
 }
 
+// popArgs pops every value currently on the stack and returns them with the
+// bottom of the stack at args[0], matching the operand order expected by PDF
+// content-stream operators.
+func popArgs(stk *Stack) []Value {
+	n := stk.Len()
+	args := make([]Value, n)
+	for i := n - 1; i >= 0; i-- {
+		args[i] = stk.Pop()
+	}
+	return args
+}
+
+// recoverTo recovers from a panic raised while parsing PDF content and stores
+// it in err, after calling reset to discard any partially built result. It is
+// meant to be deferred by methods that use panic-based parse error handling.
+func recoverTo(err *error, reset func()) {
+	if r := recover(); r != nil {
+		reset()
+		*err = errors.New(fmt.Sprint(r))
+	}
+}
+
+// decodeText decodes raw font code points with enc and returns UTF-8 text.
+func decodeText(enc TextEncoding, raw string) string {
+	var b strings.Builder
+	for _, ch := range enc.Decode(raw) {
+		b.WriteRune(ch)
+	}
+	return b.String()
+}
+
 // GetPlainText returns the page's all text without format.
 func (p Page) GetPlainText() (result string, err error) {
-	defer func() {
-		if r := recover(); r != nil {
-			result = ""
-			err = errors.New(fmt.Sprint(r))
-		}
-	}()
+	defer recoverTo(&err, func() { result = "" })
 
 	// Handle in case the content page is empty
 	if p.V.IsNull() || p.V.Key("Contents").Kind() == Null {
@@ -677,23 +705,14 @@ func getPlainText(v Value, fonts map[string]Font, do func(name string) string) s
 
 	var textBuilder bytes.Buffer
 	showText := func(s string) {
-		for _, ch := range enc.Decode(s) {
-			_, err := textBuilder.WriteRune(ch)
-			if err != nil {
-				panic(err)
-			}
-		}
+		textBuilder.WriteString(decodeText(enc, s))
 	}
 	addText := func(s string) {
 		textBuilder.WriteString(s)
 	}
 
 	Interpret(v, func(stk *Stack, op string) {
-		n := stk.Len()
-		args := make([]Value, n)
-		for i := n - 1; i >= 0; i-- {
-			args[i] = stk.Pop()
-		}
+		args := popArgs(stk)
 
 		switch op {
 		default:
@@ -754,28 +773,12 @@ type Column struct {
 type Columns []*Column
 
 // GetTextByColumn returns the page's all text grouped by column
-func (p Page) GetTextByColumn() (Columns, error) {
-	result := Columns{}
-	var err error
-
-	defer func() {
-		if r := recover(); r != nil {
-			result = Columns{}
-			err = errors.New(fmt.Sprint(r))
-		}
-	}()
+func (p Page) GetTextByColumn() (result Columns, err error) {
+	defer recoverTo(&err, func() { result = Columns{} })
 
 	showText := func(enc TextEncoding, currentX, currentY float64, s string) {
-		var textBuilder bytes.Buffer
-
-		for _, ch := range enc.Decode(s) {
-			_, err := textBuilder.WriteRune(ch)
-			if err != nil {
-				panic(err)
-			}
-		}
 		text := Text{
-			S: textBuilder.String(),
+			S: decodeText(enc, s),
 			X: currentX,
 			Y: currentY,
 		}
@@ -824,32 +827,12 @@ type Row struct {
 type Rows []*Row
 
 // GetTextByRow returns the page's all text grouped by rows
-func (p Page) GetTextByRow() (Rows, error) {
-	result := Rows{}
-	var err error
-
-	defer func() {
-		if r := recover(); r != nil {
-			result = Rows{}
-			err = errors.New(fmt.Sprint(r))
-		}
-	}()
+func (p Page) GetTextByRow() (result Rows, err error) {
+	defer recoverTo(&err, func() { result = Rows{} })
 
 	showText := func(enc TextEncoding, currentX, currentY float64, s string) {
-		var textBuilder bytes.Buffer
-		for _, ch := range enc.Decode(s) {
-			_, err := textBuilder.WriteRune(ch)
-			if err != nil {
-				panic(err)
-			}
-		}
-
-		// if DebugOn {
-		// 	fmt.Println(textBuilder.String())
-		// }
-
 		text := Text{
-			S: textBuilder.String(),
+			S: decodeText(enc, s),
 			X: currentX,
 			Y: currentY,
 		}
@@ -905,11 +888,7 @@ func (p Page) walkTextBlocks(walker func(enc TextEncoding, x, y float64, s strin
 	var enc TextEncoding = &nopEncoder{}
 	var currentX, currentY float64
 	Interpret(strm, func(stk *Stack, op string) {
-		n := stk.Len()
-		args := make([]Value, n)
-		for i := n - 1; i >= 0; i-- {
-			args[i] = stk.Pop()
-		}
+		args := popArgs(stk)
 
 		// if DebugOn {
 		// 	fmt.Println(op, "->", args)
@@ -1022,11 +1001,7 @@ func parseContent(c container) (r Content) {
 	var gstack []gstate
 	var cp cPath
 	Interpret(c.v, func(stk *Stack, op string) {
-		n := stk.Len()
-		args := make([]Value, n)
-		for i := n - 1; i >= 0; i-- {
-			args[i] = stk.Pop()
-		}
+		args := popArgs(stk)
 		switch op {
 		default:
 			// if DebugOn {
@@ -1271,4 +1246,25 @@ func buildOutline(entry Value) Outline {
 		x.Child = append(x.Child, buildOutline(child))
 	}
 	return x
+}
+
+// beUint reads a big-endian code of up to 4 bytes.
+func beUint(s string) uint32 {
+	var v uint32
+	for i := 0; i < len(s); i++ {
+		v = v<<8 | uint32(s[i])
+	}
+	return v
+}
+
+// addOffset adds off to the big-endian value in s, keeping its width and carrying across bytes.
+func addOffset(s string, off uint32) string {
+	b := []byte(s)
+	carry := off
+	for i := len(b) - 1; i >= 0 && carry > 0; i-- {
+		sum := uint32(b[i]) + carry&0xff
+		b[i] = byte(sum)
+		carry = carry>>8 + sum>>8
+	}
+	return string(b)
 }
