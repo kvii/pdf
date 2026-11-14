@@ -362,19 +362,19 @@ func (e *ucs2Encoder) Decode(raw string) (text string) {
 }
 
 func newGBKEncoder() TextEncoding {
-	return &chineseEncoder{decoder: simplifiedchinese.GBK.NewDecoder()}
+	return &xTextEncoder{decoder: simplifiedchinese.GBK.NewDecoder()}
 }
 
-type chineseEncoder struct {
+type xTextEncoder struct {
 	decoder *encoding.Decoder
 }
 
-func (e *chineseEncoder) Decode(raw string) (text string) {
+func (e *xTextEncoder) Decode(raw string) (text string) {
 	var err error
 	text, err = e.decoder.String(raw)
 	if err != nil {
 		if DebugOn {
-			println("GBK decode error:", err)
+			println("xText decode error:", err)
 		}
 		return raw
 	}
