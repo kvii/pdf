@@ -228,7 +228,7 @@ func (x XObject) content(g gstate, st map[objptr]struct{}) Content {
 		do: func(c1 *Content, g1 gstate, name string) {
 			c2 := x.XObject(name).content(g1, st)
 			c1.Text = append(c1.Text, c2.Text...)
-			c1.Rect = append(c1.Rect, c2.Rect...)
+			c1.Path = append(c1.Path, c2.Path...)
 		},
 	})
 
@@ -588,21 +588,33 @@ type Text struct {
 	S        string  // the actual UTF-8 text
 }
 
-// A Rect represents a rectangle.
-type Rect struct {
-	Min, Max Point
+// A Path represents a single piece of path drawn on a page.
+type Path struct {
+	Rect         [][4]float64   // points defined by re
+	StartPoint   [2]float64     // start point of the path
+	CurrentPoint [2]float64     // current point of the path
+	Path         [][][2]float64 // points of the path
+	Operator     string         // Path-Painting Operator
 }
 
-// A Point represents an X, Y pair.
-type Point struct {
-	X float64
-	Y float64
+// Close this path.
+func (p *Path) Close() {
+	for i, points := range p.Path {
+		// a closed path must have at least 3 points
+		if len(points) <= 3 {
+			continue
+		}
+		last := points[len(points)-1]
+		if last != p.StartPoint {
+			p.Path[i] = append(p.Path[i], [2]float64{p.StartPoint[0], p.StartPoint[1]})
+		}
+	}
 }
 
 // Content describes the basic content on a page: the text and any drawn rectangles.
 type Content struct {
 	Text []Text
-	Rect []Rect
+	Path []Path
 }
 
 type gstate struct {
@@ -639,11 +651,6 @@ func (g gstate) text(w0 float64, ch rune) Text {
 		H:        math.Sqrt(c*c+d*d) * g.Tfs,
 		S:        string(ch),
 	}
-}
-
-// current path
-type cPath struct {
-	re []Rect // rectangles defined by re
 }
 
 // popArgs pops every value currently on the stack and returns them with the
@@ -966,7 +973,7 @@ func (p Page) Content() Content {
 		do: func(c *Content, g gstate, name string) {
 			c2 := p.XObject(name).content(g, map[objptr]struct{}{})
 			c.Text = append(c.Text, c2.Text...)
-			c.Rect = append(c.Rect, c2.Rect...)
+			c.Path = append(c.Path, c2.Path...)
 		},
 	})
 }
@@ -999,7 +1006,7 @@ func parseContent(c container) (r Content) {
 	}
 
 	var gstack []gstate
-	var cp cPath
+	var cp Path
 	Interpret(c.v, func(stk *Stack, op string) {
 		args := popArgs(stk)
 		switch op {
@@ -1029,29 +1036,43 @@ func parseContent(c container) (r Content) {
 			// }
 			//}
 
-		case "g": // setgray
-		case "l": // lineto
-		case "m": // moveto
-
-		case "cs": // set colorspace non-stroking
-		case "scn": // set color non-stroking
-
-		case "re": // append rectangle to path
-			if len(args) != 4 {
-				panic("bad re")
-			}
+		case "re": // rectangle
 			x, y, w, h := args[0].Float64(), args[1].Float64(), args[2].Float64(), args[3].Float64()
 			x1, y1 := c.g.CTM.transform(x, y)
 			x2, y2 := c.g.CTM.transform(x+w, y+h)
-			cp.re = append(cp.re, Rect{Point{x1, y1}, Point{x2, y2}})
+			cp.Rect = append(cp.Rect, [4]float64{x1, y1, x2, y2})
 
-		// stroking operators
-		case "S", "s":
-			r.Rect = append(r.Rect, cp.re...)
-			cp = cPath{}
-		// filling or clipping paths are not collected
-		case "f", "F", "f*", "B", "B*", "b", "b*", "n":
-			cp = cPath{}
+		case "m": // move to
+			x, y := args[0].Float64(), args[1].Float64()
+			x1, y1 := c.g.CTM.transform(x, y)
+			cp.StartPoint = [2]float64{x1, y1}
+			cp.CurrentPoint = [2]float64{x1, y1}
+			cp.Path = append(cp.Path, [][2]float64{cp.CurrentPoint})
+
+		case "l": // line to
+			if len(cp.Path) == 0 {
+				return
+			}
+			x, y := args[0].Float64(), args[1].Float64()
+			x1, y1 := c.g.CTM.transform(x, y)
+			cp.CurrentPoint = [2]float64{x1, y1}
+			cp.Path[len(cp.Path)-1] = append(cp.Path[len(cp.Path)-1], cp.CurrentPoint)
+
+		case "s", // close and stroke
+			"b",  // close, fill, and stroke
+			"b*": // close, fill, and stroke with even-odd rule
+			cp.Close()
+			cp.Operator = op
+			r.Path = append(r.Path, cp)
+			cp = Path{}
+
+		case "S", // stroke
+			"f", "F", "f*", // fill
+			"B", "B*", // fill and stroke
+			"n": // clip
+			cp.Operator = op
+			r.Path = append(r.Path, cp)
+			cp = Path{}
 
 		case "q": // save graphics state
 			gstack = append(gstack, c.g)
