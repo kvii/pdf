@@ -222,14 +222,11 @@ func (x XObject) content(g gstate, st map[objptr]struct{}) Content {
 	}
 
 	content := parseContent(container{
-		v:     x.V,
-		g:     g,
-		fonts: fonts,
-		do: func(c1 *Content, g1 gstate, name string) {
-			c2 := x.XObject(name).content(g1, st)
-			c1.Text = append(c1.Text, c2.Text...)
-			c1.Path = append(c1.Path, c2.Path...)
-		},
+		v:       x.V,
+		g:       g,
+		fonts:   fonts,
+		st:      st,
+		xObject: x.XObject,
 	})
 
 	delete(st, x.V.ptr)
@@ -608,10 +605,21 @@ func (p *Path) Close() {
 	}
 }
 
+// A Ref represents a reference to an XObject on the page.
+type Ref struct {
+	Subtype string  // XObject subtype
+	Name    string  // XObject name
+	X       float64 // X coordinate, in points
+	Y       float64 // Y coordinate, in points
+	H       float64 // height, in points
+	W       float64 // width, in points
+}
+
 // Content describes the basic content on a page: the text and any drawn rectangles.
 type Content struct {
 	Text []Text
 	Path []Path
+	Ref  []Ref
 }
 
 type gstate struct {
@@ -964,22 +972,20 @@ func (p Page) Content() Content {
 	}
 
 	return parseContent(container{
-		v:     strm,
-		g:     g,
-		fonts: fonts,
-		do: func(c *Content, g gstate, name string) {
-			c2 := p.XObject(name).content(g, map[objptr]struct{}{})
-			c.Text = append(c.Text, c2.Text...)
-			c.Path = append(c.Path, c2.Path...)
-		},
+		v:       strm,
+		g:       g,
+		fonts:   fonts,
+		st:      map[objptr]struct{}{},
+		xObject: p.XObject,
 	})
 }
 
 type container struct {
-	v     Value
-	g     gstate
-	fonts map[string]Font
-	do    func(c *Content, g gstate, name string)
+	v       Value
+	g       gstate
+	fonts   map[string]Font
+	st      map[objptr]struct{}
+	xObject func(name string) XObject
 }
 
 func parseContent(c container) (r Content) {
@@ -1225,7 +1231,27 @@ func parseContent(c container) (r Content) {
 			if len(args) != 1 {
 				panic("bad Do operator")
 			}
-			c.do(&r, c.g, args[0].Name())
+			name := args[0].Name()
+			obj := c.xObject(name)
+
+			var x1, y1, x2, y2 float64 = 0, 0, 1, 1
+			x1, y1 = c.g.CTM.transform(x1, y1)
+			x2, y2 = c.g.CTM.transform(x2, y2)
+
+			ref := Ref{
+				Subtype: obj.Subtype(),
+				Name:    name,
+				X:       x1,
+				Y:       y1,
+				H:       y2 - y1,
+				W:       x2 - x1,
+			}
+			r.Ref = append(r.Ref, ref)
+
+			r2 := obj.content(c.g, c.st)
+			r.Text = append(r.Text, r2.Text...)
+			r.Path = append(r.Path, r2.Path...)
+			r.Ref = append(r.Ref, r2.Ref...)
 		}
 	})
 	return
