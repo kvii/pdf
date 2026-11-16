@@ -593,20 +593,17 @@ type Path struct {
 	Rect         [][4]float64   // points defined by re
 	StartPoint   [2]float64     // start point of the path
 	CurrentPoint [2]float64     // current point of the path
-	Path         [][][2]float64 // points of the path
+	Path         [][][2]float64 // points of sub paths
 	Operator     string         // Path-Painting Operator
 }
 
-// Close this path.
+// Close sub paths.
 func (p *Path) Close() {
 	for i, points := range p.Path {
-		// a closed path must have at least 3 points
-		if len(points) <= 3 {
-			continue
-		}
+		first := points[0]
 		last := points[len(points)-1]
-		if last != p.StartPoint {
-			p.Path[i] = append(p.Path[i], [2]float64{p.StartPoint[0], p.StartPoint[1]})
+		if last != first {
+			p.Path[i] = append(p.Path[i], first)
 		}
 	}
 }
@@ -1037,26 +1034,42 @@ func parseContent(c container) (r Content) {
 			//}
 
 		case "re": // rectangle
+			if len(args) != 4 {
+				panic("bad re")
+			}
 			x, y, w, h := args[0].Float64(), args[1].Float64(), args[2].Float64(), args[3].Float64()
 			x1, y1 := c.g.CTM.transform(x, y)
 			x2, y2 := c.g.CTM.transform(x+w, y+h)
 			cp.Rect = append(cp.Rect, [4]float64{x1, y1, x2, y2})
 
 		case "m": // move to
+			if len(args) != 2 {
+				panic("bad m")
+			}
 			x, y := args[0].Float64(), args[1].Float64()
 			x1, y1 := c.g.CTM.transform(x, y)
 			cp.StartPoint = [2]float64{x1, y1}
 			cp.CurrentPoint = [2]float64{x1, y1}
-			cp.Path = append(cp.Path, [][2]float64{cp.CurrentPoint})
+			cp.Path = append(cp.Path, [][2]float64{})
 
 		case "l": // line to
-			if len(cp.Path) == 0 {
-				return
+			if len(args) != 2 {
+				panic("bad l")
 			}
 			x, y := args[0].Float64(), args[1].Float64()
 			x1, y1 := c.g.CTM.transform(x, y)
 			cp.CurrentPoint = [2]float64{x1, y1}
+			if len(cp.Path[len(cp.Path)-1]) == 0 {
+				cp.Path[len(cp.Path)-1] = append(cp.Path[len(cp.Path)-1], cp.StartPoint)
+			}
 			cp.Path[len(cp.Path)-1] = append(cp.Path[len(cp.Path)-1], cp.CurrentPoint)
+
+		case "h": // close path
+			if cp.CurrentPoint != cp.StartPoint {
+				cp.CurrentPoint = cp.StartPoint
+				cp.Path[len(cp.Path)-1] = append(cp.Path[len(cp.Path)-1], cp.CurrentPoint)
+			}
+			cp.Path = append(cp.Path, [][2]float64{})
 
 		case "s", // close and stroke
 			"b",  // close, fill, and stroke
