@@ -579,6 +579,7 @@ func (m matrix) transform(x, y float64) (float64, float64) {
 type Text struct {
 	Font     string  // the font used
 	FontSize float64 // the font size, in points (1/72 of an inch)
+	Tr       int     // text rendering mode
 	X        float64 // the X coordinate, in points, increasing left to right
 	Y        float64 // the Y coordinate, in points, increasing bottom to top
 	W        float64 // the width of the text, in points
@@ -638,7 +639,7 @@ type gstate struct {
 	CTM   matrix
 }
 
-func (g gstate) text(w0 float64, ch rune) Text {
+func (g gstate) text(w0 float64, tr int, ch rune) Text {
 	font := g.Tf.BaseFont()
 	if i := strings.Index(font, "+"); i >= 0 {
 		font = font[i+1:]
@@ -651,6 +652,7 @@ func (g gstate) text(w0 float64, ch rune) Text {
 	return Text{
 		Font:     font,
 		FontSize: size,
+		Tr:       tr,
 		X:        e,
 		Y:        f + g.Trise,
 		W:        w0 / 1000 * size,
@@ -1003,7 +1005,7 @@ func parseContent(c container) (r Content) {
 			}
 			n++
 
-			r.Text = append(r.Text, c.g.text(w0, ch))
+			r.Text = append(r.Text, c.g.text(w0, c.g.Tmode, ch))
 
 			tx := w0/1000*c.g.Tfs + c.g.Tc
 			tx *= c.g.Th
