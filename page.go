@@ -196,7 +196,7 @@ func (x XObject) getPlainText(st map[objptr]struct{}) (result string) {
 }
 
 // content returns the XObject's content.
-func (x XObject) content(g gstate, st map[objptr]struct{}) Content {
+func (x XObject) content(prefix string, g gstate, st map[objptr]struct{}) Content {
 	if x.V.IsNull() || x.Subtype() != "Form" {
 		return Content{}
 	}
@@ -222,6 +222,7 @@ func (x XObject) content(g gstate, st map[objptr]struct{}) Content {
 	}
 
 	content := parseContent(container{
+		prefix:  prefix,
 		v:       x.V,
 		g:       g,
 		fonts:   fonts,
@@ -608,7 +609,7 @@ func (p *Path) Close() {
 // A Ref represents a reference to an XObject on the page.
 type Ref struct {
 	Subtype string  // XObject subtype
-	Name    string  // XObject name
+	Name    string  // Path to the XObject, split by "."
 	X       float64 // X coordinate, in points
 	Y       float64 // Y coordinate, in points
 	H       float64 // height, in points
@@ -972,6 +973,7 @@ func (p Page) Content() Content {
 	}
 
 	return parseContent(container{
+		prefix:  "",
 		v:       strm,
 		g:       g,
 		fonts:   fonts,
@@ -981,6 +983,7 @@ func (p Page) Content() Content {
 }
 
 type container struct {
+	prefix  string
 	v       Value
 	g       gstate
 	fonts   map[string]Font
@@ -1238,6 +1241,9 @@ func parseContent(c container) (r Content) {
 			x1, y1 = c.g.CTM.transform(x1, y1)
 			x2, y2 = c.g.CTM.transform(x2, y2)
 
+			if c.prefix != "" {
+				name = c.prefix + "." + name
+			}
 			ref := Ref{
 				Subtype: obj.Subtype(),
 				Name:    name,
@@ -1248,7 +1254,7 @@ func parseContent(c container) (r Content) {
 			}
 			r.Ref = append(r.Ref, ref)
 
-			r2 := obj.content(c.g, c.st)
+			r2 := obj.content(name, c.g, c.st)
 			r.Text = append(r.Text, r2.Text...)
 			r.Path = append(r.Path, r2.Path...)
 			r.Ref = append(r.Ref, r2.Ref...)
