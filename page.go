@@ -613,8 +613,8 @@ type Ref struct {
 	Name    string  // Path to the XObject, split by "."
 	X       float64 // X coordinate, in points
 	Y       float64 // Y coordinate, in points
-	H       float64 // height, in points
-	W       float64 // width, in points
+	H       float64 // height, in points, maybe negative
+	W       float64 // width, in points, maybe negative
 }
 
 // Content describes the basic content on a page: the text and any drawn rectangles.
@@ -1239,7 +1239,22 @@ func parseContent(c container) (r Content) {
 			name := args[0].Name()
 			obj := c.xObject(name)
 
-			var x1, y1, x2, y2 float64 = 0, 0, 1, 1
+			var x1, y1, x2, y2 float64
+			switch t := obj.Subtype(); t {
+			case "Form":
+				bbox := obj.V.Key("BBox")
+				x1 = bbox.Index(0).Float64()
+				y1 = bbox.Index(1).Float64()
+				x2 = bbox.Index(2).Float64()
+				y2 = bbox.Index(3).Float64()
+			case "Image":
+				x1, y1, x2, y2 = 0, 0, 1, 1
+			case "PS": // do nothing
+			default:
+				if DebugOn {
+					fmt.Printf("unsupported XObject subtype: %s\n", t)
+				}
+			}
 			x1, y1 = c.g.CTM.transform(x1, y1)
 			x2, y2 = c.g.CTM.transform(x2, y2)
 
