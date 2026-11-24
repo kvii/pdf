@@ -733,7 +733,7 @@ func getPlainText(v Value, fonts map[string]Font, do func(name string) string) s
 		default:
 			return
 		case "T*": // move to start of next line
-			showText("\n")
+			addText("\n")
 		case "Tf": // set text font and size
 			if len(args) != 2 {
 				panic("bad TL")
