@@ -32,7 +32,7 @@ func splitTextArrayPDF() []byte {
 		fmt.Fprintf(&pdf, "%d 0 obj\n%s\nendobj\n", number, body)
 	}
 	writeStream := func(number int, content string) {
-		writeObject(number, fmt.Sprintf("<< /Length %d >>\nstream\n%s\nendstream", len(content)+1, content))
+		writeObject(number, fmt.Sprintf("<< /Length %d >>\nstream\n%s\nendstream", len(content), content))
 	}
 
 	writeObject(1, "<< /Type /Catalog /Pages 2 0 R >>")
