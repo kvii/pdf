@@ -290,6 +290,17 @@ func (f *Font) Encoder() TextEncoding {
 }
 
 func (f Font) getEncoder() TextEncoding {
+	toUnicode := f.V.Key("ToUnicode")
+	if toUnicode.Kind() == Stream {
+		m := readCmap(toUnicode)
+		if m != nil && len(m.bfchar) == 0 && len(m.bfrange) == 0 {
+			return &ucs2Encoder{}
+		}
+		if m != nil {
+			return m
+		}
+	}
+
 	enc := f.V.Key("Encoding")
 	switch enc.Kind() {
 	case Name:
@@ -299,7 +310,7 @@ func (f Font) getEncoder() TextEncoding {
 		case "MacRomanEncoding":
 			return &byteEncoder{&macRomanEncoding}
 		case "Identity-H":
-			return f.charmapEncoding()
+			return &byteEncoder{&pdfDocEncoding}
 		case "UniGB-UCS2-H":
 			return &ucs2Encoder{}
 		case "GBK-EUC-H":
@@ -312,8 +323,10 @@ func (f Font) getEncoder() TextEncoding {
 			}
 			return &nopEncoder{}
 		}
-	case Dict, Null:
-		return f.charmapEncoding()
+	case Dict:
+		return &dictEncoder{enc.Key("Differences")}
+	case Null:
+		return &byteEncoder{&pdfDocEncoding}
 	default:
 		if DebugOn {
 			println("unexpected encoding", enc.String())
@@ -322,20 +335,35 @@ func (f Font) getEncoder() TextEncoding {
 	}
 }
 
-func (f *Font) charmapEncoding() TextEncoding {
-	toUnicode := f.V.Key("ToUnicode")
-	if toUnicode.Kind() == Stream {
-		m := readCmap(toUnicode)
-		if m == nil {
-			return &nopEncoder{}
-		}
-		if !m.hasUnicodeMappings() {
-			return &ucs2Encoder{}
-		}
-		return m
-	}
+type dictEncoder struct {
+	v Value
+}
 
-	return &byteEncoder{&pdfDocEncoding}
+func (e *dictEncoder) Decode(raw string) (text string) {
+	r := make([]rune, 0, len(raw))
+	for i := 0; i < len(raw); i++ {
+		ch := rune(raw[i])
+		n := -1
+		for j := 0; j < e.v.Len(); j++ {
+			x := e.v.Index(j)
+			if x.Kind() == Integer {
+				n = int(x.Int64())
+				continue
+			}
+			if x.Kind() == Name {
+				if int(raw[i]) == n {
+					r := nameToRune[x.Name()]
+					if r != 0 {
+						ch = r
+						break
+					}
+				}
+				n++
+			}
+		}
+		r = append(r, ch)
+	}
+	return string(r)
 }
 
 // A TextEncoding represents a mapping between
@@ -411,10 +439,6 @@ type cmap struct {
 	space   [4][]byteRange // codespace range
 	bfrange []bfrange
 	bfchar  []bfchar
-}
-
-func (m *cmap) hasUnicodeMappings() bool {
-	return len(m.bfchar) > 0 || len(m.bfrange) > 0
 }
 
 func (m *cmap) Decode(raw string) (text string) {
